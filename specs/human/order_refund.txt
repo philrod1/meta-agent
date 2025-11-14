@@ -1,0 +1,13 @@
+Customer Refund for Digital Purchases
+
+When a customer contacts support asking for a refund, we should check if they're eligible.
+Refunds are normally allowed within 30 days of purchase, but there are exceptions.
+
+If the customer has already downloaded the file, we still allow a refund if it was an accidental purchase, but that needs approval from a manager.
+
+If there's a fraud warning on the account, stop immediately and report it to the fraud team.
+
+Once eligibility is confirmed, we should issue the refund using the same payment method the customer used and let them know by email.
+Finally, we should make sure we log everything for auditing purposes.
+
+If anything goes wrong (e.g. payment system failure or missing data) the process should stop safely and record the reason.

@@ -1,0 +1,72 @@
+version: 1
+name: order_refund
+description: Refund flow for digital goods within policy.
+inputs: [order_id, customer_id, reason, purchase_date, payment_method, price]
+outputs: [refund_receipt, email_id, audit_id]
+
+preconditions:
+  - Order exists and payment captured
+  - Customer email available
+
+success_criteria:
+  - Refund decision matches policy and approvals
+  - Customer notified of outcome
+  - Audit record written
+
+failure_conditions:
+  - Payment provider error
+  - Policy service unavailable
+  - Approval timeout
+
+nodes:
+  - id: fetch_order
+    type: tool
+    summary: Retrieve order and account
+    params: { tool: "orders.get" }
+    io: { inputs: [order_id, customer_id], outputs: [order, account] }
+    tests: ["order.id == order_id", "account.id == customer_id"]
+
+  - id: policy_check
+    type: router
+    summary: Apply 30-day window and fraud rules
+    params: {}
+    io: { inputs: [order, account, purchase_date, reason], outputs: [policy_ok, needs_approval, fraud_flag] }
+    tests: ["policy_ok in [true,false]", "fraud_flag in [true,false]"]
+
+  - id: manager_approval
+    type: approval
+    summary: Request and await manager sign-off
+    params: { timeout_hours: 24 }
+    io: { inputs: [order, account], outputs: [approved] }
+    tests: ["approved in [true,false]"]
+
+  - id: issue_refund
+    type: tool
+    summary: Call payment provider to refund
+    params: { tool: "payments.refund" }
+    io: { inputs: [order, payment_method, price], outputs: [refund_receipt] }
+    tests: ["refund_receipt.status == 'ok'"]
+
+  - id: notify_customer
+    type: tool
+    summary: Send refund confirmation email
+    params: { tool: "notifications.email", template: "refund_success" }
+    io: { inputs: [account.email, refund_receipt], outputs: [email_id] }
+    tests: ["email_id != null"]
+
+  - id: audit_log
+    type: tool
+    summary: Write audit record
+    params: { tool: "audit.write" }
+    io: { inputs: [order_id, refund_receipt, email_id], outputs: [audit_id] }
+    tests: ["audit_id != null"]
+
+edges:
+  - { from: fetch_order, to: policy_check, when: "true" }
+  - { from: policy_check, to: audit_log, when: "fraud_flag == true" }
+  - { from: policy_check, to: manager_approval, when: "needs_approval == true && policy_ok == true" }
+  - { from: policy_check, to: issue_refund, when: "needs_approval == false && policy_ok == true" }
+  - { from: manager_approval, to: issue_refund, when: "approved == true" }
+  - { from: manager_approval, to: audit_log, when: "approved == false" }
+  - { from: issue_refund, to: notify_customer, when: "refund_receipt.status == 'ok'" }
+  - { from: notify_customer, to: audit_log, when: "true" }

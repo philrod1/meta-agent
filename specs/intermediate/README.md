@@ -1,0 +1,1 @@
+This is where the first-draft semi-human spec goes.  This spec is written in Markdown by an LLM with an appropriate fine-tuning and/or prompt.

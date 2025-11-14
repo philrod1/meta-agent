@@ -1,0 +1,26 @@
+version: 1
+name: string
+description: string
+inputs: [string, ...]
+outputs: [string, ...]            # optional but recommended
+preconditions: [string, ...]      # optional
+success_criteria: [string, ...]   # optional
+failure_conditions: [string, ...] # optional
+
+nodes:
+  - id: string
+    type: tool | router | approval | task | notification | logging
+    summary: string                # optional, for humans/LLMs
+    params: {}                     # tool/config params
+    io:
+      inputs: [string, ...]
+      outputs: [string, ...]
+    tests: [string, ...]           # expressions to assert post-conditions
+    # syntactic sugar (compiler can transform to edges)
+    on_success: node_id            # optional
+    on_failure: node_id            # optional
+
+edges:
+  - from: node_id
+    to: node_id
+    when: string                   # boolean expression over data

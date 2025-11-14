@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgenticWorkflow",
+  "type": "object",
+  "required": ["name", "inputs", "nodes", "edges"],
+  "properties": {
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "inputs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "params", "io"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "enum": ["tool","router","approval","llm","noop"] },
+          "description": { "type": "string" },
+          "params": { "type": "object" },
+          "io": {
+            "type": "object",
+            "required": ["inputs","outputs"],
+            "properties": {
+              "inputs": { "type": "array", "items": { "type": "string" } },
+              "outputs": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "guards": { "type": "array", "items": { "type": "string" } },
+          "tests": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["from","to","when"],
+        "properties": {
+          "from": { "type": "string" },
+          "to": { "type": "string" },
+          "when": { "type": "string", "description": "boolean expression over context" }
+        }
+      }
+    }
+  }
+}

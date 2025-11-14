@@ -1,0 +1,1 @@
+Here is where the "human" specifications go.  I expect these to be written in plain English, poorly specified, and semi-structured at best.  The first job of an LLM is to restructure this text into an intermediate markdown format with better stucture.
