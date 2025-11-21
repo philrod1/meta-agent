@@ -112,3 +112,16 @@ So what we can do is ...
 - Aggregate results to get an overall measure of correctness for the composed workflow
 
 So correctness (at least bounded) comes from the structure, not global brute-force validation.  *Is this covered by type theory? I fear I'm getting out of my depth here.*
+
+
+## Joining up the parts
+
+I currently have the framework for the TXT -> MD -> YAML part of the system, and I have examples that build workflows.  I don't, however, have the YAML -> Workflow part.  Building this will require making decisions that I am not yet fully comfortable making.
+
+At the moment, the DAG is described in the YAML.  This would be ideal if the DAG described could be trusted -- but it is LLM generated so should be mistrusted.  Having the DAG emenrge from the splitting of the tasks into sub-tasks makes more sense to me, but implies that the DAG is rebuilt on each run.
+
+I see three options: -
+
+- Let the LLM build the YAML but without the DAG elements.  Have the code generate the DAG.
+- Let the LLM build the YANL with the DAG, but test that the generated DAG is correct -- update as needed.  We could also give the LLM the tools needed to generate a correct DAG.
+- Combine the first two options by having the code generate the DAG and inserting it into the YAML after-the-fact.  With this option, if the DAG is described in the YAML, there is no need to use code to generate it.

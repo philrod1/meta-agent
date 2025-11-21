@@ -1,0 +1,127 @@
+name: sorting_workflow
+description: "Divide-and-conquer sorting workflow with a 'choice' option for len==2"
+inputs:
+  - numbers
+outputs:
+  - sorted_numbers
+
+# Optional: specify combiner and verifier so the MetaAgent can be task-agnostic
+combiner:
+  type: concatenate
+  output_key: sorted_numbers
+
+verifier:
+  type: sorting
+
+# Top-level decision node handles base cases and recursion.
+nodes:
+  - id: decide_case
+    type: decision
+    params:
+      # Guards evaluated in order. For `len(numbers) == 2` we demonstrate a `choice` decomposition.
+      guards:
+        - condition: "len(numbers) == 0"
+          action:
+            type: return
+            outputs:
+              sorted_numbers: "[]"
+        - condition: "len(numbers) == 1"
+          action:
+            type: return
+            outputs:
+              sorted_numbers: "numbers"
+        - condition: "len(numbers) == 2"
+          decomposition:
+            strategy: choice
+            # Alternatives: first try the simple base-case comparator, then the split-then-merge plan
+            alternatives:
+              - name: base_case
+                plan:
+                  - id: sort_base
+                    type: tool
+                    params:
+                      tool: compare_and_return
+                    outputs:
+                      sorted_numbers: "sorted_numbers"
+                    tests:
+                      - "len(sorted_numbers) == 2"
+                      - "sorted_numbers[0] <= sorted_numbers[1]"
+              - name: split_then_merge
+                plan:
+                  - id: split
+                    type: tool
+                    params:
+                      tool: split_in_half
+                    outputs:
+                      left: "left"
+                      right: "right"
+                  - id: sort_left
+                    type: workflow
+                    params:
+                      call: sorting_workflow
+                      inputs:
+                        numbers: "left"
+                    outputs:
+                      left_sorted: "sorted_numbers"
+                  - id: sort_right
+                    type: workflow
+                    params:
+                      call: sorting_workflow
+                      inputs:
+                        numbers: "right"
+                    outputs:
+                      right_sorted: "sorted_numbers"
+                  - id: merge
+                    type: tool
+                    params:
+                      tool: join_two_sorted_lists
+                    inputs:
+                      left_sorted: "left_sorted"
+                      right_sorted: "right_sorted"
+                    outputs:
+                      sorted_numbers: "sorted_numbers"
+        - condition: "len(numbers) > 2"
+          decomposition:
+            strategy: hierarchical
+            plan:
+              - id: split
+                type: tool
+                params:
+                  tool: split_in_half
+                outputs:
+                  left: "left"
+                  right: "right"
+              - id: sort_left
+                type: workflow
+                params:
+                  call: sorting_workflow
+                  inputs:
+                    numbers: "left"
+                outputs:
+                  left_sorted: "sorted_numbers"
+              - id: sort_right
+                type: workflow
+                params:
+                  call: sorting_workflow
+                  inputs:
+                    numbers: "right"
+                outputs:
+                  right_sorted: "sorted_numbers"
+              - id: merge
+                type: tool
+                params:
+                  tool: join_two_sorted_lists
+                inputs:
+                  left_sorted: "left_sorted"
+                  right_sorted: "right_sorted"
+                outputs:
+                  sorted_numbers: "sorted_numbers"
+
+# Top-level verification: ensure final result is sorted and is a permutation of the input
+tests:
+  - "sorted_numbers == sorted(numbers)"
+  - "collections.Counter(sorted_numbers) == collections.Counter(numbers)"
+
+notes:
+  - "Choice decomposition uses sequential-fallback semantics by default: try alternative 1, then alternative 2 if verification fails."
+  - "Alternatives may be annotated with metadata (cost, expected_success) in future iterations to enable scored selection."

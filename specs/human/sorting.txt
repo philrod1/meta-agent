@@ -1,0 +1,6 @@
+I want to sort a large list of integers suing the workflow approach.
+I want to implement a divide-and-conquer sorting algorithm using an Agent Workflow.
+To solve the Sort Task, we need to determine if the list can be trivially sorted.  A single elemnt list is already sorted, so that would be a good choice.
+If the list is of size 2, we can simply decide if we need to swap the element to get the correct order.
+If the list is larger than two, we need to split the task into smaller (hopefully equal sized) sub-tasks.
+Once we have all the trivial Tasks solved, we need to combine their results to build the sorted list at the top-level task.

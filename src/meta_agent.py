@@ -10,6 +10,8 @@ The meta-agent follows this cycle:
 """
 
 from typing import List, Dict, Any, Optional
+from src.workflow.guards import evaluate_condition
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import time
 
@@ -20,6 +22,7 @@ class Task:
     id: str
     description: str
     inputs: Dict[str, Any] = field(default_factory=dict)
+    params: Dict[str, Any] = field(default_factory=dict)
     is_atomic: bool = False  # True if task cannot be decomposed further
     verification_criteria: List[str] = field(default_factory=list)
     parent_id: Optional[str] = None
@@ -34,11 +37,21 @@ class Task:
 
 @dataclass
 class DecompositionResult:
-    """Result of decomposing a task."""
+    """
+    Result of decomposing a task.
+    For the "choice" strategy, indicates alternative sub-tasks.
+    - Multiple service backends (pay with card, PayPal, bank transfer, etc.).
+    - Failover / fallback logic (try fast/cheap method first then fallback).
+    - A/B attempts where only one needed
+    Sequential is AND, parallel is ALL, hierarchical is AND, choice is OR
+    """
     sub_tasks: List[Task]
-    decomposition_strategy: str  # e.g., "sequential", "parallel", "hierarchical"
+    decomposition_strategy: str  # e.g., "sequential", "parallel", "hierarchical", "choice"
     recombination_plan: str      # How to merge sub-task results
     reasoning: str               # Why this decomposition was chosen
+    # For 'choice' decomposition, alternatives is a list of plans where each plan is a
+    # list of Tasks. The meta-agent will select/try alternatives according to policy.
+    alternatives: Optional[List[List[Task]]] = None
 
 
 class MetaAgent:
@@ -85,10 +98,96 @@ class MetaAgent:
         try:
             decomposition = self.decomposer.decompose(task, depth)
             
+            # Handle 'choice' decomposition specially: alternatives = list of plans
+            if decomposition.decomposition_strategy == 'choice' and decomposition.alternatives:
+                self._log(f"{'  ' * depth}[META] Handling choice decomposition with {len(decomposition.alternatives)} alternatives")
+                # Sequential-fallback: try each alternative in order, stop on first verified success
+                for alt_idx, plan in enumerate(decomposition.alternatives):
+                    self._log(f"{'  ' * depth}[META] Trying alternative {alt_idx+1}/{len(decomposition.alternatives)}")
+                    alt_sub_results = []
+                    alt_failed = False
+                    # local context for this alternative: start from parent's inputs
+                    alt_context = dict(task.inputs or {})
+                    for sub_task in plan:
+                        self._log(f"{'  ' * (depth+1)}[META] Solving alt sub-task {sub_task.id}")
+                        # resolve placeholders on sub_task.inputs using alt_context
+                        if getattr(sub_task, 'inputs', None):
+                            for k, v in list(sub_task.inputs.items()):
+                                if isinstance(v, str) and v in alt_context:
+                                    sub_task.inputs[k] = alt_context.get(v)
+                                elif v is None and k in alt_context:
+                                    sub_task.inputs[k] = alt_context.get(k)
+
+                        sub_result = self.solve(sub_task, depth + 2)
+                        alt_sub_results.append(sub_result)
+                        if not sub_result.get('verified', False):
+                            self._log(f"{'  ' * (depth+1)}[META] Alternative {alt_idx+1} sub-task {sub_task.id} failed verification")
+                            alt_failed = True
+                            break
+
+                        # update alt_context with outputs produced by this sub-task
+                        res = sub_result.get('result')
+                        if isinstance(res, dict):
+                            # If the sub_task declared an outputs mapping, prefer mapping child keys
+                            outputs_map = getattr(sub_task, 'outputs', {}) or {}
+                            if isinstance(outputs_map, dict) and outputs_map:
+                                for parent_key, child_key in outputs_map.items():
+                                    # child_key can be a string naming the child's output
+                                    if isinstance(child_key, str) and child_key in res:
+                                        alt_context[parent_key] = res.get(child_key)
+                            # Also merge raw outputs for general propagation
+                            for k, v in res.items():
+                                alt_context[k] = v
+
+                    if alt_failed:
+                        continue
+
+                    # Combine results for this alternative
+                    self._log(f"{'  ' * depth}[META] Alternative {alt_idx+1} succeeded, recombining")
+                    combined = self.combiner.combine(task=task, sub_tasks=plan, sub_results=alt_sub_results, recombination_plan=decomposition.recombination_plan)
+                    task.result = combined
+                    verification = self.verifier.verify(task)
+                    if verification.get('valid'):
+                        task.status = 'verified'
+                        return {
+                            'result': combined,
+                            'verified': True,
+                            'execution_tree': task,
+                            'logs': self.execution_log,
+                            'verification': verification
+                        }
+                    else:
+                        self._log(f"{'  ' * depth}[META] Alternative {alt_idx+1} recombination failed verification")
+
+                # All alternatives tried and none verified
+                self._log(f"{'  ' * depth}[META] All alternatives failed for task {task.id}")
+                task.status = 'failed'
+                return {
+                    'result': None,
+                    'verified': False,
+                    'execution_tree': task,
+                    'logs': self.execution_log,
+                    'error': 'All choice alternatives failed'
+                }
+
             if not decomposition.sub_tasks:
-                # If decomposition produces no sub-tasks, treat as atomic
-                self._log(f"{'  ' * depth}[META] No sub-tasks generated, executing as atomic")
-                return self._execute_atomic_task(task, depth)
+                # If decomposition produces no sub-tasks, two possibilities:
+                # 1) decomposer produced a return value and set task.result -> skip execution and verify
+                # 2) no decomposition and no pre-filled result -> treat as atomic and execute
+                if getattr(task, 'result', None) is not None:
+                    self._log(f"{'  ' * depth}[META] No sub-tasks and pre-filled result from decomposer, verifying directly")
+                    verification = self.verifier.verify(task)
+                    task.status = 'verified' if verification.get('valid') else 'completed'
+                    return {
+                        'result': task.result,
+                        'verified': verification.get('valid'),
+                        'execution_tree': task,
+                        'logs': self.execution_log,
+                        'verification': verification
+                    }
+                else:
+                    self._log(f"{'  ' * depth}[META] No sub-tasks generated, executing as atomic")
+                    return self._execute_atomic_task(task, depth)
             
             self._log(f"{'  ' * depth}[META] Decomposed into {len(decomposition.sub_tasks)} sub-tasks")
             self._log(f"{'  ' * depth}[META] Strategy: {decomposition.decomposition_strategy}")
@@ -98,10 +197,49 @@ class MetaAgent:
             
             # Recursively solve each sub-task
             sub_results = []
+            # Maintain a local execution context for guard evaluation and data passing
+            context = dict(task.inputs or {})
             for i, sub_task in enumerate(decomposition.sub_tasks):
                 self._log(f"{'  ' * depth}[META] Solving sub-task {i+1}/{len(decomposition.sub_tasks)}")
+                # Resolve any input placeholders on the sub_task from the current context.
+                # If a sub_task input value is a string that names a variable in context,
+                # substitute it with the actual value so executors receive concrete inputs.
+                if getattr(sub_task, 'inputs', None):
+                    for k, v in list(sub_task.inputs.items()):
+                        if isinstance(v, str) and v in context:
+                            sub_task.inputs[k] = context.get(v)
+                        elif v is None and k in context:
+                            # if input placeholder is None, try to pull same-named value from context
+                            sub_task.inputs[k] = context.get(k)
+                # If the loader attached guard_conditions, evaluate them against current context
+                guards = getattr(sub_task, 'guard_conditions', None)
+                if guards:
+                    should_run = False
+                    # If any incoming guard is unspecified or 'true', treat as runnable; otherwise require at least one true
+                    for g in guards:
+                        try:
+                            if evaluate_condition(g, context):
+                                should_run = True
+                                break
+                        except Exception:
+                            continue
+                    if not should_run:
+                        self._log(f"{'  ' * depth}[META] Skipping sub-task {sub_task.id} due to guard conditions: {guards}")
+                        continue
+
                 sub_result = self.solve(sub_task, depth + 1)
                 sub_results.append(sub_result)
+                # Update context with any named outputs produced by the sub-task
+                res = sub_result.get('result')
+                if isinstance(res, dict):
+                    outputs_map = getattr(sub_task, 'outputs', {}) or {}
+                    if isinstance(outputs_map, dict) and outputs_map:
+                        for parent_key, child_key in outputs_map.items():
+                            if isinstance(child_key, str) and child_key in res:
+                                context[parent_key] = res.get(child_key)
+                    # Also merge raw outputs for general propagation
+                    for k, v in res.items():
+                        context[k] = v
                 
                 # Early termination if critical sub-task fails
                 if not sub_result['verified']:
@@ -172,6 +310,9 @@ class MetaAgent:
                 self._log(f"{'  ' * depth}[EXEC] Task {task.id} verified successfully")
             else:
                 self._log(f"{'  ' * depth}[EXEC] Task {task.id} verification failed")
+                # Log verification details for debugging
+                for entry in verification.get('log', []):
+                    self._log(f"{'  ' * (depth+1)}[VERIF] {entry}")
             
             return {
                 'result': result,
@@ -204,7 +345,18 @@ class MetaAgent:
         print(message)  # Also print for real-time feedback
 
 
-class TaskDecomposer:
+class AbstractTaskDecomposer(ABC):
+    """
+    Abstract base for task decomposers.
+    Concrete decomposers should implement `decompose` to return a DecompositionResult.
+    """
+
+    @abstractmethod
+    def decompose(self, task: Task, depth: int) -> DecompositionResult:
+        raise NotImplementedError()
+
+
+class TaskDecomposer(AbstractTaskDecomposer):
     """
     Decomposes high-level tasks into simpler, verifiable sub-tasks.
 
@@ -326,6 +478,73 @@ class TaskDecomposer:
             return "Direct: return single result"
 
 
+class ChoiceTaskDecomposer(TaskDecomposer):
+    """
+    A concrete decomposer that demonstrates the 'choice' decomposition strategy.
+
+    For tasks with input `numbers` of length 2 (e.g., sorting), it will return two
+    alternative plans: (1) treat as base-case comparator, (2) split into singletons
+    and merge. This is a minimal example for demo and testing.
+    """
+
+    def decompose(self, task: Task, depth: int) -> DecompositionResult:
+        # If inputs include a numbers list of length 2, produce a choice
+        numbers = task.inputs.get('numbers') if isinstance(task.inputs, dict) else None
+        if isinstance(numbers, list) and len(numbers) == 2:
+            # Alternative 1: base comparator
+            alt1 = [
+                Task(
+                    id=f"{task.id}.base",
+                    description="Compare two elements and return ordered pair",
+                    inputs={'numbers': numbers},
+                    is_atomic=True,
+                    parent_id=task.id,
+                    verification_criteria=[]
+                )
+            ]
+
+            # Alternative 2: split into singletons, sort each (atomic) and merge
+            left_list = [numbers[0]]
+            right_list = [numbers[1]]
+            alt2 = [
+                Task(
+                    id=f"{task.id}.left",
+                    description="Sort left singleton",
+                    inputs={'numbers': left_list},
+                    is_atomic=True,
+                    parent_id=task.id,
+                    verification_criteria=[]
+                ),
+                Task(
+                    id=f"{task.id}.right",
+                    description="Sort right singleton",
+                    inputs={'numbers': right_list},
+                    is_atomic=True,
+                    parent_id=task.id,
+                    verification_criteria=[]
+                ),
+                Task(
+                    id=f"{task.id}.merge",
+                    description="Merge two singletons into ordered pair",
+                    inputs={},
+                    is_atomic=True,
+                    parent_id=task.id,
+                    verification_criteria=[]
+                )
+            ]
+
+            return DecompositionResult(
+                sub_tasks=[],
+                decomposition_strategy='choice',
+                recombination_plan='merge',
+                reasoning='Choice between base comparator and split-then-merge',
+                alternatives=[alt1, alt2]
+            )
+
+        # Fallback to default heuristic decomposition
+        return super().decompose(task, depth)
+
+
 class TaskExecutor:
     """
     Executes atomic tasks that cannot be decomposed further.
@@ -340,20 +559,76 @@ class TaskExecutor:
     def execute(self, task: Task) -> Dict[str, Any]:
         """Execute an atomic task and return result."""
         self.execution_count += 1
-        
-        # For MVP: simple mock execution
-        # In production: this would compile task to workflow, execute workflow, or call tools
-        
+        # Record that an execution (agent/tool invocation) occurred; this maps to
+        # the user's expectation of "agents created" for this demo.
+        try:
+            from src.workflow.factory import increment_agent_creation_count
+            increment_agent_creation_count(1)
+        except Exception:
+            pass
+        # If a tool is specified in task.params, attempt to run it from the tools registry.
+        tool_name = None
+        if getattr(task, 'params', None):
+            tool_name = task.params.get('tool') or task.params.get('behavior')
+
+        if tool_name:
+            # Lazy import the registry to avoid import cycles
+            from src.tools.registry import get_tool
+
+            fn = get_tool(tool_name)
+            if fn is None:
+                raise RuntimeError(f"Tool '{tool_name}' not found in registry")
+
+            # Call tool with provided inputs. Tools should accept keyword args.
+            try:
+                if isinstance(task.inputs, dict):
+                    tool_result = fn(**task.inputs)
+                else:
+                    tool_result = fn(task.inputs)
+            except TypeError as e:
+                # Fallback: attempt to map task.inputs keys to function parameter names
+                import inspect
+                sig = inspect.signature(fn)
+                params = [p for p in sig.parameters.values() if p.kind in (p.POSITIONAL_OR_KEYWORD, p.POSITIONAL_ONLY)]
+                mapped = {}
+                for p in params:
+                    pname = p.name
+                    found_key = None
+                    if isinstance(task.inputs, dict):
+                        for k in task.inputs.keys():
+                            if k == pname or k.startswith(pname) or k.endswith(pname) or k.replace('_sorted','') == pname:
+                                found_key = k
+                                break
+                    if found_key is not None:
+                        mapped[pname] = task.inputs[found_key]
+                try:
+                    if mapped:
+                        tool_result = fn(**mapped)
+                    else:
+                        # last-resort: pass whole inputs
+                        tool_result = fn(task.inputs)
+                except Exception:
+                    # re-raise original TypeError to preserve message
+                    raise e
+
+            # Normalize output to a dict
+            if not isinstance(tool_result, dict):
+                return {'task_id': task.id, 'result': tool_result}
+
+            tool_result.setdefault('task_id', task.id)
+            return tool_result
+
+        # Fallback mock execution for tasks without a registered tool
         result = {
             'task_id': task.id,
             'output': f"Executed: {task.description}",
             'execution_count': self.execution_count,
             'inputs_received': task.inputs
         }
-        
+
         # Simulate some processing
         time.sleep(0.01)
-        
+
         return result
 
 
