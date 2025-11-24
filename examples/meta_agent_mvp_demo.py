@@ -18,8 +18,8 @@ def print_tree(task: Task, indent: int = 0):
     status_symbol = {
         "pending": "|",
         "executing": ">",
-        "completed": "/",
-        "verified": "//",
+        "completed": "✓",
+        "verified": "✓✓",
         "failed": "x"
     }.get(task.status, "?")
     

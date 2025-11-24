@@ -1,0 +1,177 @@
+{
+  "name": "order_refund",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        200
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "2",
+      "name": "fetch_order",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        200
+      ],
+      "parameters": {
+        "functionCode": "return items;"
+      }
+    },
+    {
+      "id": "3",
+      "name": "policy_check",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        350
+      ],
+      "parameters": {
+        "functionCode": "return items;"
+      }
+    },
+    {
+      "id": "4",
+      "name": "manager_approval",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        500
+      ],
+      "parameters": {
+        "functionCode": "return items;"
+      }
+    },
+    {
+      "id": "5",
+      "name": "issue_refund",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        650
+      ],
+      "parameters": {
+        "functionCode": "return items;"
+      }
+    },
+    {
+      "id": "6",
+      "name": "notify_customer",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        800
+      ],
+      "parameters": {
+        "functionCode": "return items;"
+      }
+    },
+    {
+      "id": "7",
+      "name": "audit_log",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        400,
+        950
+      ],
+      "parameters": {
+        "functionCode": "return items;"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "fetch_order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetch_order": {
+      "main": [
+        [
+          {
+            "node": "policy_check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "policy_check": {
+      "main": [
+        [
+          {
+            "node": "audit_log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "manager_approval",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "issue_refund",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "manager_approval": {
+      "main": [
+        [
+          {
+            "node": "issue_refund",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "audit_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "issue_refund": {
+      "main": [
+        [
+          {
+            "node": "notify_customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "notify_customer": {
+      "main": [
+        [
+          {
+            "node": "audit_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

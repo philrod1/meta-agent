@@ -11,6 +11,7 @@ import yaml
 from ..meta_agent import Task, DecompositionResult, AbstractTaskDecomposer
 from ..meta_agent import TaskVerifier, ResultCombiner
 import collections
+from .schema import validate_workflow
 
 
 def _eval_simple_condition(cond: str, context: Dict[str, Any]) -> bool:
@@ -322,7 +323,17 @@ def load_yaml_to_meta_agent(yaml_path: str):
     MetaAgent constructed using the returned decomposer.
     """
     with open(yaml_path, "r") as fh:
-        parsed = yaml.safe_load(fh)
+        parsed_raw = yaml.safe_load(fh)
+    # Validate and coerce via pydantic models; if validation fails, raise a
+    # clear error. validate_workflow returns (model, dict).
+    try:
+        # Validate YAML but keep the original raw dict for downstream logic to
+        # avoid subtle structural changes from model->dict conversion.
+        _, _ = validate_workflow(parsed_raw)
+        parsed = parsed_raw
+    except Exception:
+        # If validation fails, re-raise so caller sees a helpful message
+        raise
 
     # Create a top-level Task representing the workflow invocation
     name = parsed.get("name", "workflow")
